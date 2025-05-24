@@ -10,11 +10,24 @@
 
 #include "fs.h"
 
+int read_metadata(int fd, Metadata* meta) {
+    if (lseek(fd, 0, SEEK_SET) == -1) return -1;
+    if (read(fd, meta, sizeof(Metadata)) != sizeof(Metadata)) return -1;
+    return 0;
+}
+
+int write_metadata(int fd, Metadata* meta) {
+    if (lseek(fd, 0, SEEK_SET) == -1) return -1;
+    if (write(fd, meta, sizeof(Metadata)) != sizeof(Metadata)) return -1;
+    return 0;
+}
+
 void fs_format() {
     int fd = open(DISK_FILE, O_CREAT | O_WRONLY | O_TRUNC, 0644);
     if (fd == -1) {
         const char* msg = "Disk dosyası oluşturulamadı\n";
         write(STDERR_FILENO, msg, strlen(msg));
+		fs_log("Format atıldı");
         _exit(1);
     }
 
@@ -46,6 +59,8 @@ int fs_create(const char* filename) {
     Metadata meta;
     lseek(fd, 0, SEEK_SET);
     read(fd, &meta, sizeof(Metadata));
+	
+	
 
     // Aynı isimde dosya var mı
     for (int i = 0; i < MAX_FILES; i++) {
@@ -82,6 +97,8 @@ int fs_create(const char* filename) {
                 last_end = end;
             }
         }
+		
+		
     }
 
     strncpy(meta.files[slot].name, filename, FILENAME_MAX_LENGTH);
@@ -93,10 +110,10 @@ int fs_create(const char* filename) {
     lseek(fd, 0, SEEK_SET);
     write(fd, &meta, sizeof(Metadata));
     close(fd);
-
+fs_log("Yeni dosya oluşturuldu");
 write_str(STDOUT_FILENO, "Dosya oluşturuldu: ");
 write(STDOUT_FILENO, filename, my_strlen(filename));
-write_str(STDOUT_FILENO, "\n");
+write_str(STDOUT_FILENO, "\n\n");
     return 0;
 }
 
@@ -123,6 +140,7 @@ int fs_delete(char* filename) {
 
             //char msg[128];
             int len = 0;
+			fs_log("Dosya silindi");
             len += write(STDOUT_FILENO, "Dosya silindi: ", 15);
             len += write(STDOUT_FILENO, filename, strlen(filename));
             write(STDOUT_FILENO, "\n", 1);
@@ -130,52 +148,62 @@ int fs_delete(char* filename) {
         }
     }
 
-    const char* not_found = "Hata: Dosya bulunamadı.\n";
+    const char* not_found = "Hata: Dosya bulunamadı.\n\n";
     write(STDOUT_FILENO, not_found, strlen(not_found));
     close(fd);
+	
     return -1;
 }
 
-void fs_ls() {
-    int fd = open(DISK_PATH, O_RDONLY);
+int fs_rename(const char* old_name, const char* new_name) {
+    int fd = open(DISK_PATH, O_RDWR);
     if (fd < 0) {
-        const char* err = "Disk açılamadı\n";
-        write(STDERR_FILENO, err, strlen(err));
-        return;
+        write_str(STDERR_FILENO, "Disk açılamadı\n");
+        return -1;
     }
 
     Metadata meta;
-    lseek(fd, 0, SEEK_SET);
-    read(fd, &meta, sizeof(Metadata));
-    close(fd);
+    if (read_metadata(fd, &meta) != 0) {
+        close(fd);
+        return -1;
+    }
 
-    const char* header = "--- Dosyalar ---\n";
-    write(STDOUT_FILENO, header, strlen(header));
-
-    int found = 0;
-    for (int i = 0; i < MAX_FILES; i++) {
-        if (meta.files[i].used) {
-            found = 1;
-
-            //char buffer[256];
-            int len = 0;
-
-            len += write(STDOUT_FILENO, "Ad: ", 4);
-            len += write(STDOUT_FILENO, meta.files[i].name, strlen(meta.files[i].name));
-            len += write(STDOUT_FILENO, " | Boyut: ", 10);
-
-            char size_buf[32];
-            int size_len = int_to_str(meta.files[i].size, size_buf);
-            write(STDOUT_FILENO, size_buf, size_len);
-
-            write(STDOUT_FILENO, " byte\n", 6);
+    for (int i = 0; i < meta.file_count; i++) {
+        if (meta.files[i].used && my_strcmp(meta.files[i].name, new_name) == 0) {
+            write_str(STDERR_FILENO, "Hata: '");
+            write(fd, new_name, my_strlen(new_name));
+            write_str(STDERR_FILENO, "' isminde zaten bir dosya var.\n");
+            close(fd);
+            return -1;
         }
     }
 
-    if (!found) {
-        const char* none = "Hiç dosya yok.\n";
-        write(STDOUT_FILENO, none, strlen(none));
+    for (int i = 0; i < meta.file_count; i++) {
+        if (meta.files[i].used && my_strcmp(meta.files[i].name, old_name) == 0) {
+            my_strncpy(meta.files[i].name, new_name, FILENAME_MAX_LENGTH);
+
+            if (write_metadata(fd, &meta) != 0) {
+                close(fd);
+                return -1;
+            }
+
+            close(fd);
+			fs_log("Dosya adı değiştirildi");
+            write_str(STDOUT_FILENO, "Dosya adı '");
+            write(STDOUT_FILENO, new_name, my_strlen(new_name));
+            write_str(STDOUT_FILENO, "' olarak değiştirildi.\n");
+
+            return 0;
+        }
     }
+
+	
+    write_str(STDERR_FILENO, "Hata: '");
+    write(STDERR_FILENO, old_name, my_strlen(old_name));
+    write_str(STDERR_FILENO, "' isminde bir dosya bulunamadı.\n");
+
+    close(fd);
+    return -1;
 }
 
 int fs_write(const char* filename, const char* data) {
@@ -208,7 +236,7 @@ int fs_write(const char* filename, const char* data) {
             lseek(fd, 0, SEEK_SET);
             write(fd, &meta, sizeof(Metadata));
             close(fd);
-
+			fs_log("Dosya veri yazıldı");
             write(STDOUT_FILENO, "Yazma başarılı: ", 16);
             write(STDOUT_FILENO, filename, strlen(filename));
             write(STDOUT_FILENO, "\n", 1);
@@ -219,113 +247,8 @@ int fs_write(const char* filename, const char* data) {
     const char* not_found = "Hata: Dosya bulunamadı.\n";
     write(STDOUT_FILENO, not_found, strlen(not_found));
     close(fd);
+	
     return -1;
-}
-
-int fs_exists(const char* filename) {
-    int fd = open(DISK_PATH, O_RDONLY);
-    if (fd == -1) return 0;
-
-    Metadata meta;
-    read(fd, &meta, sizeof(Metadata));
-    close(fd);
-
-    for (int i = 0; i < MAX_FILES; i++) {
-        if (meta.files[i].used && strcmp(meta.files[i].name, filename) == 0) {
-            return 1;
-        }
-    }
-
-    return 0;
-}
-
-int fs_size(const char* filename) {
-    int fd = open(DISK_PATH, O_RDONLY);
-    if (fd == -1) return -1;
-
-    Metadata meta;
-    if (read(fd, &meta, sizeof(Metadata)) != sizeof(Metadata)) {
-        close(fd);
-        return -1;
-    }
-
-    close(fd);
-
-    for (int i = 0; i < MAX_FILES; i++) {
-        if (meta.files[i].used) {
-            int j = 0;
-            while (filename[j] && filename[j] == meta.files[i].name[j]) j++;
-            if (filename[j] == '\0' && meta.files[i].name[j] == '\0') {
-                return meta.files[i].size;
-            }
-        }
-    }
-
-    return -1; // Dosya yok
-}
-
-int fs_read(const char* filename, int offset, int length, char* buffer) {
-    int fd = open(DISK_PATH, O_RDONLY);
-    if (fd < 0) return -1;
-
-    Metadata meta;
-    if (read(fd, &meta, sizeof(Metadata)) != sizeof(Metadata)) {
-        close(fd);
-        return -1;
-    }
-
-    for (int i = 0; i < MAX_FILES; i++) {
-        if (meta.files[i].used) {
-            int j = 0;
-            while (filename[j] && filename[j] == meta.files[i].name[j]) j++;
-            if (filename[j] == '\0' && meta.files[i].name[j] == '\0') {
-                if (offset + length > meta.files[i].size) {
-                    close(fd);
-                    return -1;
-                }
-
-                lseek(fd, meta.files[i].start + offset, SEEK_SET);
-                int bytes_read = read(fd, buffer, length);
-                close(fd);
-
-                if (bytes_read != length) return -1;
-                return bytes_read;
-            }
-        }
-    }
-
-    close(fd);
-    return -1;
-}
-
-int my_strcmp(const char* s1, const char* s2) {
-    while (*s1 && (*s1 == *s2)) {
-        s1++; s2++;
-    }
-    return (unsigned char)*s1 - (unsigned char)*s2;
-}
-
-void my_strncpy(char* dest, const char* src, int n) {
-    int i;
-    for (i = 0; i < n - 1 && src[i]; i++) {
-        dest[i] = src[i];
-    }
-    dest[i] = '\0';
-}
-
-int my_strlen(const char* s) {
-    int len = 0;
-    while (s[len]) len++;
-    return len;
-}
-
-void write_str(int fd, const char* str) {
-    write(fd, str, my_strlen(str));
-}
-
-void my_perror(const char* msg) {
-    write_str(STDERR_FILENO, msg);
-    write_str(STDERR_FILENO, "\n");
 }
 
 int fs_append(const char* filename, const char* data, int size) {
@@ -398,20 +321,9 @@ int fs_append(const char* filename, const char* data, int size) {
         close(fd);
         return -1;
     }
-
+	
+	fs_log("Dosyanın sonuna veri eklendi");
     close(fd);
-    return 0;
-}
-
-int read_metadata(int fd, Metadata* meta) {
-    if (lseek(fd, 0, SEEK_SET) == -1) return -1;
-    if (read(fd, meta, sizeof(Metadata)) != sizeof(Metadata)) return -1;
-    return 0;
-}
-
-int write_metadata(int fd, Metadata* meta) {
-    if (lseek(fd, 0, SEEK_SET) == -1) return -1;
-    if (write(fd, meta, sizeof(Metadata)) != sizeof(Metadata)) return -1;
     return 0;
 }
 
@@ -438,10 +350,11 @@ int fs_truncate(const char* filename, int new_size) {
                 return -1;
             }
             close(fd);
+			fs_log("Dosya truncate işlemi");
             return 0;
         }
     }
-
+	
     close(fd);
     return -1;
 }
@@ -493,6 +406,7 @@ int fs_cat(const char* filename) {
 
             free(buffer);
             close(fd);
+			fs_log("Dosya cat işlemi");
             return 0;
         }
     }
@@ -500,6 +414,154 @@ int fs_cat(const char* filename) {
     write_str(STDOUT_FILENO, "Dosya bulunamadı.\n");
     close(fd);
     return -1;
+}
+
+int fs_exists(const char* filename) {
+    int fd = open(DISK_PATH, O_RDONLY);
+    if (fd == -1) return 0;
+
+    Metadata meta;
+    read(fd, &meta, sizeof(Metadata));
+    close(fd);
+
+    for (int i = 0; i < MAX_FILES; i++) {
+        if (meta.files[i].used && strcmp(meta.files[i].name, filename) == 0) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+int fs_size(const char* filename) {
+    int fd = open(DISK_PATH, O_RDONLY);
+    if (fd == -1) return -1;
+
+    Metadata meta;
+    if (read(fd, &meta, sizeof(Metadata)) != sizeof(Metadata)) {
+        close(fd);
+        return -1;
+    }
+
+    close(fd);
+
+    for (int i = 0; i < MAX_FILES; i++) {
+        if (meta.files[i].used) {
+            int j = 0;
+            while (filename[j] && filename[j] == meta.files[i].name[j]) j++;
+            if (filename[j] == '\0' && meta.files[i].name[j] == '\0') {
+                return meta.files[i].size;
+            }
+        }
+    }
+
+    return -1; // Dosya yok
+}
+
+void fs_ls() {
+    int fd = open(DISK_PATH, O_RDONLY);
+    if (fd < 0) {
+        const char* err = "Disk açılamadı\n";
+        write(STDERR_FILENO, err, strlen(err));
+        return;
+    }
+
+    Metadata meta;
+    lseek(fd, 0, SEEK_SET);
+    read(fd, &meta, sizeof(Metadata));
+    close(fd);
+
+    const char* header = "--- Dosyalar ---\n";
+    write(STDOUT_FILENO, header, strlen(header));
+
+    int found = 0;
+    for (int i = 0; i < MAX_FILES; i++) {
+        if (meta.files[i].used) {
+            found = 1;
+
+            //char buffer[256];
+            int len = 0;
+
+            len += write(STDOUT_FILENO, "Ad: ", 4);
+            len += write(STDOUT_FILENO, meta.files[i].name, strlen(meta.files[i].name));
+            len += write(STDOUT_FILENO, " | Boyut: ", 10);
+
+            char size_buf[32];
+            int size_len = int_to_str(meta.files[i].size, size_buf);
+            write(STDOUT_FILENO, size_buf, size_len);
+
+            write(STDOUT_FILENO, " byte\n", 6);
+        }
+    }
+
+    if (!found) {
+        const char* none = "Hiç dosya yok.\n";
+        write(STDOUT_FILENO, none, strlen(none));
+    }
+}
+
+int fs_read(const char* filename, int offset, int length, char* buffer) {
+    int fd = open(DISK_PATH, O_RDONLY);
+    if (fd < 0) return -1;
+
+    Metadata meta;
+    if (read(fd, &meta, sizeof(Metadata)) != sizeof(Metadata)) {
+        close(fd);
+        return -1;
+    }
+
+    for (int i = 0; i < MAX_FILES; i++) {
+        if (meta.files[i].used) {
+            int j = 0;
+            while (filename[j] && filename[j] == meta.files[i].name[j]) j++;
+            if (filename[j] == '\0' && meta.files[i].name[j] == '\0') {
+                if (offset + length > meta.files[i].size) {
+                    close(fd);
+                    return -1;
+                }
+
+                lseek(fd, meta.files[i].start + offset, SEEK_SET);
+                int bytes_read = read(fd, buffer, length);
+                close(fd);
+
+                if (bytes_read != length) return -1;
+                return bytes_read;
+            }
+        }
+    }
+
+    close(fd);
+    return -1;
+}
+
+int my_strcmp(const char* s1, const char* s2) {
+    while (*s1 && (*s1 == *s2)) {
+        s1++; s2++;
+    }
+    return (unsigned char)*s1 - (unsigned char)*s2;
+}
+
+void my_strncpy(char* dest, const char* src, int n) {
+    int i;
+    for (i = 0; i < n - 1 && src[i]; i++) {
+        dest[i] = src[i];
+    }
+    dest[i] = '\0';
+}
+
+int my_strlen(const char* s) {
+    int len = 0;
+    while (s[len]) len++;
+    return len;
+}
+
+void write_str(int fd, const char* str) {
+    write(fd, str, my_strlen(str));
+}
+
+void my_perror(const char* msg) {
+    write_str(STDERR_FILENO, msg);
+    write_str(STDERR_FILENO, "\n");
 }
 
 int fs_copy(const char* src_filename, const char* dest_filename) {
@@ -547,7 +609,6 @@ int fs_copy(const char* src_filename, const char* dest_filename) {
     return 0;
 }
 
-
 int fs_diff(const char* file1, const char* file2) {
     if (!fs_exists(file1) || !fs_exists(file2)) {
         write_str(STDERR_FILENO, "Dosyalardan biri mevcut değil.\n");
@@ -591,57 +652,6 @@ int fs_diff(const char* file1, const char* file2) {
 
     return diff;
 }
-
-int fs_rename(const char* old_name, const char* new_name) {
-    int fd = open(DISK_PATH, O_RDWR);
-    if (fd < 0) {
-        write_str(STDERR_FILENO, "Disk açılamadı\n");
-        return -1;
-    }
-
-    Metadata meta;
-    if (read_metadata(fd, &meta) != 0) {
-        close(fd);
-        return -1;
-    }
-
-    for (int i = 0; i < meta.file_count; i++) {
-        if (meta.files[i].used && my_strcmp(meta.files[i].name, new_name) == 0) {
-            write_str(STDERR_FILENO, "Hata: '");
-            write(fd, new_name, my_strlen(new_name));
-            write_str(STDERR_FILENO, "' isminde zaten bir dosya var.\n");
-            close(fd);
-            return -1;
-        }
-    }
-
-    for (int i = 0; i < meta.file_count; i++) {
-        if (meta.files[i].used && my_strcmp(meta.files[i].name, old_name) == 0) {
-            my_strncpy(meta.files[i].name, new_name, FILENAME_MAX_LENGTH);
-
-            if (write_metadata(fd, &meta) != 0) {
-                close(fd);
-                return -1;
-            }
-
-            close(fd);
-
-            write_str(STDOUT_FILENO, "Dosya adı '");
-            write(STDOUT_FILENO, new_name, my_strlen(new_name));
-            write_str(STDOUT_FILENO, "' olarak değiştirildi.\n");
-
-            return 0;
-        }
-    }
-
-    write_str(STDERR_FILENO, "Hata: '");
-    write(STDERR_FILENO, old_name, my_strlen(old_name));
-    write_str(STDERR_FILENO, "' isminde bir dosya bulunamadı.\n");
-
-    close(fd);
-    return -1;
-}
-
 
 int fs_defragment() {
     int fd = open(DISK_PATH, O_RDWR);
@@ -690,6 +700,7 @@ int fs_defragment() {
     close(fd);
 
     const char* msg = "Disk başarıyla defragment edildi.\n";
+	fs_log("Disk fragmente edildi");
     write(STDOUT_FILENO, msg, strlen(msg));
     return 0;
 }
@@ -762,10 +773,10 @@ int fs_backup(const char* backup_filename) {
     close(src_fd);
     close(dest_fd);
     const char* msg = "SYedekleme başarılı\n";
+	fs_log("Yedekleme alındı");
     write(STDOUT_FILENO, msg, strlen(msg));
     return 0;
 }
-
 
 int fs_restore(const char* backup_filename) {
     int backup_fd = open(backup_filename, O_RDONLY);
@@ -799,6 +810,7 @@ int fs_restore(const char* backup_filename) {
     close(disk_fd);
 
     const char* msg = "Geri yükleme başarılı\n";
+	fs_log("Geri yükleme yapıldı");
     write(STDOUT_FILENO, msg, strlen(msg));
     return 0;
 }
@@ -834,7 +846,6 @@ void fs_log(const char* message) {
 
     close(fd);
 }
-
 
 int fs_mv(const char* old_name, const char* new_name) {
     // Aslında rename işlemidir

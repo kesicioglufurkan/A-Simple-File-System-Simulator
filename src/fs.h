@@ -2,11 +2,14 @@
 #define FS_H
 
 #define DISK_FILE "disk/disk.sim"
+
 #define MAX_FILES 128
+#define METADATA_SIZE 4096            // 4 KB
 #define FILENAME_MAX_LENGTH 32
+
 #define DISK_PATH "disk/disk.sim"
 #define DISK_SIZE (1024 * 1024) // 1 MB
-#define METADATA_SIZE 4096            // 4 KB
+
 #define BLOCK_SIZE 512
 
 typedef struct {
